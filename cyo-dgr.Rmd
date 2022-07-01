@@ -1,0 +1,357 @@
+---
+title: "Mushroom classification model"
+author: "dgr"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r Setup, include=FALSE, purl=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  dpi = 144
+)
+
+# https://stackoverflow.com/questions/25646333/#46526740
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+if (knitr::is_latex_output()) {
+  knitr::knit_hooks$set(chunk = function(x, options) {
+    x <- def.chunk.hook(x, options)
+    paste0("\n \\", "small","\n\n", x, "\n\n \\normalsize")
+  })
+}
+
+```
+
+# I. Overview
+
+For the final capstone project of the Harvard's Professional Certification in Data Science, I selected a publicly available dataset for a classification problem with the goal of building an algorithm that prescribes if a mushroom is edible or poisonous. I selected this dataset because 1) it was a different type of dataset and analysis (it is a classification problem) compared to the MovieLens analysis, and 2) it piqued my interest because of my ecology background.
+
+The dataset was available for download from UC Irvine's Center for Machine Learning and Intelligent Systems at <https://archive.ics.uci.edu/ml/datasets/Secondary+Mushroom+Dataset#> and it included 61069 hypothetical mushrooms with caps based on 173 species (353 mushrooms per species). The initial set had 21 variables (i.e., columns), one being the outcome (edible vs. poisonous) and the other 20 being possible features. Several predictors had many missing values, thus I reduced their number to 11, which was still a large number as far as computational time. After initial data cleaning, exploration, and visualization, I split the dataset into training and test sets (50-50 split). I tested 6 prediction models, including logistic, k nearest neighbor, classification tree, random forest (2 models), and ensemble.
+
+The best performing model was a random forest model computed using the caret::train function (method = "rf") with two tuning parameters. The accuracy was 0.9935. I then looked at variable importance and re-run the best model using only the five most important variable. The accuracy was lower at 0.9168, but this allowed for the selection of fewer variables to visually explore in more detail. I, thus, included a few graphs showing how these variables relate to each other.
+
+I have successfully developed a model that predicted with great accuracy whether a mushroom is edible or poisonous. This project allowed me to develop a model on my own applying the knowledge I gain in the previous eight courses of this certification program, giving me confidence on the skills I gained, and inspiring me to learn more about the different approaches available for developing useful models.
+
+# II. Methods and Analysis
+
+## 1. Data download
+
+I downloaded the data from the UC Irvine website making sure the categorical variables are read as factors to facilitate model building.
+
+```{r download-dataset}
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(readr)) install.packages("readr", repos = "http://cran.us.r-project.org")
+if(!require(mlbench)) install.packages("mlbench", repos = "http://cran.us.r-project.org")
+if(!require(rpart.plot)) install.packages("rpart.plot", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(Rborist)) install.packages("Rborist", repos = "http://cran.us.r-project.org")
+library(tidyverse)
+library(caret)
+library(data.table)
+library(readr)
+library(rpart.plot)
+library(ggplot2)
+library(mlbench)
+library(Rborist)
+
+temp <- tempfile()
+url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/00615/MushroomDataset.zip"
+download.file(url, temp)
+mush <- read.table(unz(temp, "MushroomDataset/secondary_data.csv"), sep = ";", 
+                   header = TRUE, stringsAsFactors = TRUE)
+
+```
+
+## 2. Data exploration and preparation
+
+I looked at the structure and variable summary for the 21 variables in the set.
+
+```{r data-exploration}
+str(mush)
+head(mush)
+summary(mush, maxsum =20)
+dim(mush)
+```
+
+Based on the summary, there are 21 variables (columns), and 61,069 observation (rows). Also, it is apparent from the summary that this dataset has some variables with many NAs, so the first step was to remove 9 of the variables, each with 2,471 or more missing values.
+
+```{r data-selection}
+mush <- mush %>%
+  select(class, cap.diameter, cap.shape, cap.color, does.bruise.or.bleed,
+                        gill.color, stem.height, stem.width, stem.color, has.ring, habitat, season)
+str(mush)
+summary(mush, maxsum =20)
+dim(mush)
+```
+
+The new dataset has now 12 variables, one of each ('class') is the variable that we want to predict. The other 11 variables are potential predictors. Next, I renamed the factor levels for the 9 categorical variables in the dataset to be able to make more informative graphs. Data set description is available at <https://archive.ics.uci.edu/ml/datasets/Secondary+Mushroom+Dataset#>
+
+```{r rename-levels}
+levels(mush$class) <- list("edible" = "e",  "poisonous" = "p")
+levels(mush$cap.shape) <- list("bell"="b", "conical"="c", "convex"="x", "flat"="f",
+                               "sunken"="s", "spherical"="p", "others"="o")
+levels(mush$cap.color) <- list("brown"="n", "buff"="b", "gray"="g", "green"="r", 
+                               "pink"="p", "purple"="u", "red"="e", "white"="w", 
+                               "yellow"="y", "blue"="l", "orange"="o", "black"="k")
+levels(mush$does.bruise.or.bleed) <- list("bruises-or-bleeding"="t", "no"="f")
+
+levels(mush$gill.color) <- list("brown"="n", "buff"="b", "gray"="g", "green"="r", "pink"="p",
+                                "purple"="u", "red"="e", "white"="w", "yellow"="y", "blue"="l",
+                                "orange"="o", "black"="k", "none"="f")
+levels(mush$stem.color) <- list("brown"="n", "buff"="b", "gray"="g", "green"="r", "pink"="p",
+                                "purple"="u", "red"="e", "white"="w", "yellow"="y", "blue"="l",
+                                "orange"="o", "black"="k", "none"="f")
+levels(mush$has.ring) <- list("ring"="t", "none"="f")
+levels(mush$habitat) <- list("grasses"="g", "leaves"="l", "meadows"="m", "paths"="p", "heaths"="h",
+                             "urban"="u", "waste"="w", "woods"="d")
+levels(mush$season) <- list("spring"="s", "summer"="u", "autumn"="a", "winter"="w")
+
+str(mush)
+
+```
+
+## 3. Data visualization
+
+Before splitting the dataset into training and testing sets, I performed some visualizations to get a better idea of the structure of the datasets. These are univariate graphs showing the distribution of each of the 12 variables in the dataset, not the relationships among different variables which I explored after building the model.
+
+```{r distribution-graphs, fig.height = 28, fig.width = 20}
+
+par(mfrow=c(2,2)) # Set up a 2 x 2 plotting space
+distributions <-function(index) 
+{plot(mush[,index], main=names(mush[index]),pch=24, las=2, 
+      xlab="",ylab="")}
+lapply(1:12,FUN=distributions)
+```
+
+We can see that there is a balanced number of 'edible' and 'poisonous' outcomes. Cap diameter (continuous variable measured in cm) shows a peak in very large caps (6 cm). There were 7 cap shapes with convex shape being most frequent, followed by flat. Out of the 12 cap color possible, brown was by far the most common color, follow by yellow and white.
+
+We can also see that there are roughly 5 times more mushrooms that do not bruise or bleed than those that do. The most frequent gill color (gill is the structure underneath the mushroom cap) was white, followed by brown and yellow. Stem height (continuous variable measured in cm) shows a peak at very small sizes (less than 0.5 cm) and then between 4 and 5.5 cm. Stem width (continuous variable measured in mm) shows that larger values between 5 and 6 mm were most common.
+
+Of the 13 possible stem colors, the most common colors were white and brown. There were roughly three more times mushrooms in the dataset that did not have a ring versus those that had a ring (this is a structure found on the stem of mature mushrooms). Not surprisingly, the most common habitat was woods, and most common seasons were summer and autumn.
+
+## 4. Testing models
+
+In an initial attempt to build models with 11 predictors, I observed very long computational times. Thus, I looked at methods of trimming down the number of predictors (i.e., feature selection). I found that the Recursive Feature Elimination (RFE) method, which uses a simple backwards selection algorithm, may work for this type of dataset. However, it did not work well for my computer due to a large computational time (\>60 min). As an alternative, I used variable importance after selecting the best model.
+
+(This is the code I tried to use for RFE:
+
+#\>control \<- rfeControl(functions=rfFuncs, method="cv", number=10)
+
+#\>results \<- rfe(mush[,2:12], mush[,1], sizes=c(5:7), rfeControl=control)
+
+#\>print(results)
+
+#\>predictors(results)
+
+#\>plot(results, type=c("g", "o")) )
+
+Next, I created the training and test sets. I initially chose an 80 - 20 partition between training and test sets, but, again, computational times for each model I tested were long, so I decided to use a 50-50 partition and this worked better, without significantly reducing the accuracy of the models. I checked the results of the partition using str() and dim().
+
+```{r partitioning}
+set.seed(1, sample.kind="Rounding")
+index <- createDataPartition(y = mush$class, times = 1, p = 0.5, list = FALSE)
+mush_train <- mush[-index,]
+mush_test <- mush[index,]
+
+str(mush_train)
+dim(mush_train) 
+
+str(mush_test)
+dim(mush_test) 
+```
+
+In the next step, I tested several models, including logistic, k nearest neighbor, classification tree, random forest, and ensemble. Methods such as LDA, QDA, and Loess of which we learned in the course, were not appropriate because the mushroom dataset includes non-numeric (i.e., nominal) predictors.
+
+### Model 1 - Logistic regression
+
+I started by testing the simplest model, logistic regression with glm function in caret::train.
+
+```{r glm}
+train_glm <- train(mush_train[,2:12], mush_train[,1], method = "glm")
+glm_preds <- predict(train_glm, mush_test[,2:12])
+mean(glm_preds == mush_test[,1])  #accuracy
+```
+
+The accuracy was 0.731685. This was not great, but it was a starting point.
+
+### Model 2 - K-nearest neighbor (knn)
+
+The second model was based on knn. I used cross-validation (method = "cv") with number = 10 (this tells the algorithm to break the set into 10-folds for cross-validation). k is the number of neighbors (this parameter can be tuned). tuneGrid tells which values the main parameter will take. I plotted the model accuracy as a function of k and then calculated the predictions and the final accuracy of the best knn model.
+
+```{r knn}
+control <- trainControl(method = "cv", number = 10, p =.9)
+train_knn <- train(class ~ ., method = "knn", data = mush_train,
+                   tuneGrid = data.frame(k = seq(1, 13, by = 2)),
+                   trControl = control)
+plot(train_knn)
+train_knn$bestTune
+knn_preds <- predict(train_knn, mush_test)
+confusionMatrix(knn_preds, mush_test$class)$overall["Accuracy"]
+```
+
+The accuracy of the knn model was 0.9901097, quite an improvement over logistic regression.
+
+### Model 3 - Classification tree - rpart
+
+The third model was based on rpart. The tuning parameter here was the Complexity Parameter (cp) which tells the model that any split that does not decrease the overall lack of fit by a factor of cp is not attempted. I plotted the model accuracy as a function of cp.
+
+```{r rpart}
+train_rpart <- train(class ~ ., 
+                     method = "rpart",
+                     tuneGrid = data.frame(cp = seq(0.0, 0.06, len = 25)),
+                     data = mush_train)
+train_rpart$bestTune
+plot(train_rpart)
+rpart_preds <- predict(train_rpart, mush_test)
+confusionMatrix(rpart_preds, mush_test$class)$overall["Accuracy"]
+```
+
+rpart model accuracy was 0.9697396.
+
+### Model 4 - Random forest using "Rborist" package
+
+The fourth model used the newer package "Rborist" developed for random forests. Parameters that can be tuned included: nTree - the number of trees to grow, nSamp - number of rows to sample, per tree, minNode - parameter that represents the minimum number of distinct row references to split a node, and predFixed - the number of trial predictors for a split (same as mtry in the next model).
+
+```{r randomForest1}
+control <-trainControl(method = "cv", number = 10, p =0.8)
+grid <- expand.grid(minNode = c(1,2,3,4,5), predFixed = c(1,3,5,7,9,15,25))
+train_rf_1 <- train(class ~ ., 
+                 method = "Rborist", nTree = 100, trControl = control,
+                 tuneGrid = grid,
+                 data = mush_train,
+                 nSamp = 2000)
+train_rf_1$bestTune
+
+fit_rf_1 <- Rborist(mush_train[,2:12], mush_train[,1], 
+                  nTree = 1000, 
+                  minNode =train_rf_1$bestTune$minNode, 
+                  predFixed = train_rf_1$bestTune$predFixed)
+rf_1_preds <- predict(train_rf_1,  mush_test)
+confusionMatrix(rf_1_preds, mush_test$class)$overall["Accuracy"]
+```
+
+Random forest (Rborist) accuracy was 0.9835271, higher than the one from the rpart model but lower than the knn model accuracy.
+
+### Model 5 - Random forest using "caret::train" package
+
+For this fourth model, mtry is a tuning parameter (same as predFixed in the previous model) and represents the number of variables randomly sampled as candidates at each split. ntree is the number of trees to grow in the forest and it cannot be tuned, it is just set fixed. However, the larger the ntree, the more accurate the model. It also means that the larger ntree, the longer it takes to run the model.
+
+```{r randomForest2}
+train_rf_2 <- train(class ~ ., 
+                    method = "rf", ntree = 100,
+                    tuneGrid = data.frame(mtry =  seq(6, 12, 2)),
+                    data = mush_train)
+plot(train_rf_2)
+rf_2_preds <- predict(train_rf_2, mush_test)
+confusionMatrix(rf_2_preds, mush_test$class)$overall["Accuracy"]
+```
+
+Random forest (train -rf) accuracy was 0.993829.
+
+### Model 6 - Ensemble
+
+This sixth model is an ensemble, which means that it takes several models and combines them to produce an outcome with the hope that it reduces the error and thus increases accuracy.
+
+```{r ensemble}
+
+ensemble <- cbind(glm = glm_preds == "edible", 
+                  knn = knn_preds == "edible", 
+                  rpart = rpart_preds == "edible",
+                  rf_1 = rf_1_preds == "edible", 
+                  rf_2 = rf_2_preds == "edible")
+
+ensemble_preds <- ifelse(rowMeans(ensemble) > 0.5, "edible", "poisonous")
+mean(ensemble_preds == mush_test[,1]) #accuracy
+
+```
+
+Ensemble accuracy was 0.9912232. This is good, but not the best.
+
+# III. Modeling Results
+
+I summarized the results from running these six models in a table, for easier examination.
+
+```{r results-table}
+  models <- c("Logistic regression", "K nearest neighbors", "Classification tree",
+  "Random forest-Rborist", "Random forest-rf", "Ensemble")
+  accuracy <- c(mean(glm_preds == mush_test[,1]),
+                mean(knn_preds == mush_test[,1]),
+                mean(rpart_preds == mush_test[,1]),
+                mean(rf_1_preds == mush_test[,1]),
+                mean(rf_2_preds == mush_test[,1]),
+                mean(ensemble_preds == mush_test[,1]))
+  data.frame(Model = models, Accuracy = accuracy)
+```
+
+We can see that there are three models with accuracy above 0.99. The best model is based on the Random Forest (rf_2 method) and has a prediction accuracy of 0.9935. I then looked at additional details for this model, such as sensitivity and specificity:
+
+```{r confusionMatrix}
+  confusionMatrix(rf_2_preds, mush_test$class)
+```
+
+With both Sensitivity and Specificity above 0.99, I got another indication that this model performs quite well.
+
+With this method, however, a decision tree cannot be build to visualize the classification rules because the results come from a forest made up of many trees. One way to get an insight on the contribution of each predictor to the model is by looking at Variable Importance scores, which quantify the impact of the predictor rather than a specific effect, such as how a variable responds to the variation in another variable.
+
+```{r varImp}
+imp <- varImp(train_rf_2)
+print(imp)
+ggplot(imp)
+```
+
+Most imp variables were: stem.width, stem.height, cap.diameter, (all above 66%), and then does.bruise.or.bleed and stem color. Next, I rerun the best rf_2 model with these five most important variables and the accuracy was 0.9160635, still fair (although, when it comes to eating mushrooms I would rather be 99% accurate in predicting that a mushroom is not poisonous rather than 92%). For exploration and visualization purposes, I considered this an acceptable accuracy. Thus, for the last step I created a few graphs using these five most important predictors and the outcome variable "class" and using the entire 'mush' dataset.
+
+First graph looked at stem height, stem width, bruising & bleeding, and stem color.
+
+```{r final-graph1}
+  mush %>% group_by(stem.color) %>% 
+    ggplot(aes(stem.width, stem.height, col = does.bruise.or.bleed )) +
+           geom_point() +facet_grid(stem.color ~ does.bruise.or.bleed)
+```
+
+This first set of scatterplots suggests there may be a difference in stem width between mushrooms that bruise or bleed and those that don't, with the latter being shorter and also not getting as tall with a stem width increase. There is however a lot more variation in the stem height as stem width increases in the mushrooms that do not bruise or bleed, especially those with brown, white, or yellow stems. It seems that mushrooms with brown stems can get wide and tall and are less likely to bruise.
+
+The second graph looked at stem height, cap diameter, bruising & bleeding, and edibility.
+
+```{r final-graph2}
+   mush %>% group_by(class) %>% 
+    ggplot(aes(stem.height, cap.diameter, col = does.bruise.or.bleed )) +
+    geom_point() +facet_grid( does.bruise.or.bleed ~ class)
+```
+
+This second graph, a series of scatterplots, shows an interesting pattern for edible mushrooms that do not bruise or bleed as they seem to include some of the largest mushrooms in terms of height but also two separate groups, one of smaller cap diameter (up to about 30 mm) and one of larger cap sizes (between 40 and 60 mm). We can also see that mushrooms that do bruise or bleed tend to be smaller in height and cap diameter, regardless of edibility.
+
+```{r final-graph3}
+  mush %>% ggplot(aes(does.bruise.or.bleed, stem.width, fill = class)) + 
+    geom_boxplot()
+```
+
+The third graph, a boxplot, compares edible and poisonous mushrooms by stem width and whether they bruise/bleed or not. Mushrooms that do not bruise/bleed can have large stems, although the median is actually lower for both edible and especially for poisonous mushrooms compared to those that bruise/bleed.
+
+```{r final-graph4}
+  mush %>% ggplot(aes(stem.color, cap.diameter, fill = class)) + 
+    geom_boxplot()
+```
+
+This last graph, also a boxplot, compares edible and poisonous mushrooms by stem color and cap diameter. We can see again that brown is a frequent stem color and that edible mushrooms can have larger cap diameter. Note also that poisonous mushrooms don't have buff stem color, and if you find a mushroom with black stem, it is likely edible only if it has a large cap.
+
+# IV. Conclusions
+
+I selected a classification problem with the goal of building a model predicting whether a mushroom is edible or poisonous. I built the model based on three numerical characteristics and eight nominal (categorical) variables. My best model was based on a random forest algorithm and achieved a 99.4% accuracy. This is quite an important achievement with practical implications in the context of determining if consuming an individual object in the set (in this case, a mushroom) will result in poisoning, or even death.
+
+I also realize that there are limitations to the work I presented here. First, finding a way to include or explore all 20 initial predictor variables (assuming access to a more powerful computer or faster algorithms) would be beneficial. With a more powerful computer I would also like to perform the RFE method of feature selection and redo the work with an 80-20 split between training and test sets. For a future iteration, I would like to learn more about normalization as well as about converting categories into numeric variables, maybe trying a method called one-hot encoding. Also I would look into dummy coding.
+
+I much enjoyed the challenge and the process of building the model and writing about it.
+
+# V. References
+
+Dataset download - <https://archive.ics.uci.edu/ml/datasets/Secondary+Mushroom+Dataset#>
+
+Feature selection - <https://machinelearningmastery.com/feature-selection-with-the-caret-r-package/> <http://topepo.github.io/caret/recursive-feature-elimination.html#rfe>
+
+Random Forest - <https://machinelearningmastery.com/tune-machine-learning-algorithms-in-r/#:~:text=mtry%3A%20Number%20of%20variables%20randomly,Number%20of%20trees%20to%20grow.>
